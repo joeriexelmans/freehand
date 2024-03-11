@@ -1,6 +1,6 @@
 ![screenshot](screenshot.png)
 
-Prototype of a web-based sketching app intended to support:
+Prototype of a web-/SVG-based sketching app intended to support:
   * pressure sensitivity
   * multi-touch (multiple people drawing together on a large touchscreen)
 
