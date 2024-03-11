@@ -56,7 +56,6 @@
   const MAXPATHLENGTH = 200;
   const rootSvg = document.getElementById("svg");
   const translateG = document.getElementById("translate");
-  const selectRect = document.getElementById("select");
   const memUsageElement = document.getElementById("mem-usage");
 
   // global state
@@ -65,7 +64,7 @@
   const pointerId2Stroke = new Map();
 
   // everything that has been drawn on the canvas
-  const strokes = [];
+  let strokes = [];
 
   // viewport pan
   let panX = 0;
@@ -367,6 +366,23 @@
   rootSvg.addEventListener("touchmove", e => {
     console.log(e);
   });
+
+  document.addEventListener("keydown", e => {
+    if (e.key === "Delete") {
+      if (selection) {
+        // delete selected strokes
+        for (const stroke of selection.strokes) {
+          for (const {element} of stroke) {
+            translateG.removeChild(element);
+          }
+        }
+        strokes = strokes.filter(stroke => !selection.strokes.includes(stroke));
+        translateG.removeChild(selection.rect);
+        selection = null;
+        computeMemUsage();
+      }
+    }
+  })
 </script>
 </body>
 </html>
