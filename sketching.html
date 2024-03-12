@@ -12,8 +12,8 @@
       border-width: 1px;
       border-color: black;
     }
-    .controls > label {
-      margin: 6px;
+    .controls > * {
+      margin: 10px;
       user-select: none;
     }
   </style>
@@ -21,10 +21,16 @@
 <body>
 
 <svg id="svg" style="position: absolute; top: 0px; left: 0px; height: 100%; width:100%; touch-action: none">
-  <g id="translate"/>
+  <g id="panning"/>
 </svg>
 
 <div class="controls" style="position: absolute; top: 0px; left: 0px; z-index: 100; background-color: white;">
+
+<span>
+  <input id="undo" type="button" value="undo" disabled />
+  <input id="redo" type="button" value="redo" disabled />
+</span>
+
 <label>
   <input id="ctrl-pressure" type="checkbox" checked>
   pressure sensitive
@@ -48,15 +54,17 @@
 
 <label>
   <span id="mem-usage">0</span>
-  bytes memory usage
+  bytes
 </label>
 </div>
 
 <script>
   const MAXPATHLENGTH = 200;
   const rootSvg = document.getElementById("svg");
-  const translateG = document.getElementById("translate");
+  const panningG = document.getElementById("panning");
   const memUsageElement = document.getElementById("mem-usage");
+  const undoButton = document.getElementById("undo");
+  const redoButton = document.getElementById("redo");
 
   // global state
 
@@ -64,7 +72,7 @@
   const pointerId2Stroke = new Map();
 
   // everything that has been drawn on the canvas
-  let strokes = [];
+  let paths = [];
 
   // viewport pan
   let panX = 0;
@@ -73,11 +81,111 @@
   // current selection
   let selection = null;
 
+  let undoStack = [];
+  let redoStack = [];
+
+  undoButton.addEventListener("click", e => {
+    const toUndo = undoStack.pop();
+    if (toUndo.type === "move-select") {
+      const {selection, dX, dY} = toUndo;
+      moveSelection(selection, -dX, -dY);
+    }
+    else if (toUndo.type === "stroke") {
+      for (const {element} of toUndo.subpaths) {
+        panningG.removeChild(element);
+      }
+      paths.pop(); // safe to assume that path to undo is last in this list.
+    }
+    else if (toUndo.type === "select") {
+      const {selection: s, prevSelection, element} = toUndo;
+      if (s !== null) {
+        panningG.removeChild(s.rect);
+      }
+      if (prevSelection !== null) {
+        panningG.appendChild(prevSelection.rect);
+      }
+      selection = prevSelection;
+    }
+    pushRedo(toUndo);
+    if (undoStack.length === 0) {
+      undoButton.setAttribute("disabled", "true");
+    }
+    computeMemUsage();
+  });
+
+  redoButton.addEventListener("click", e => {
+    const toRedo = redoStack.pop();
+    if (toRedo.type === "move-select") {
+      const {selection, dX, dY} = toRedo;
+      moveSelection(selection, dX, dY);
+    }
+    else if (toRedo.type === "stroke") {
+      for (const {element} of toRedo.subpaths) {
+        panningG.appendChild(element);
+      }
+      paths.push({subpaths: toRedo.subpaths});
+    }
+    else if (toRedo.type === "select") {
+      const {selection: s, prevSelection, element} = toRedo;
+      if (s !== null) {
+        panningG.appendChild(s.rect);
+      }
+      if (prevSelection !== null) {
+        panningG.removeChild(prevSelection.rect);
+      }
+      selection = s;
+    }
+    pushUndo(toRedo);
+    if (redoStack.length === 0) {
+      redoButton.setAttribute("disabled", "true");
+    }
+    computeMemUsage();
+  })
+
+  function pushUndo(what) {
+    undoStack.push(what);
+    undoButton.removeAttribute("disabled");
+  }
+
+  function pushRedo(what) {
+    redoStack.push(what);
+    redoButton.removeAttribute("disabled");
+  }
+
+  function clearRedo(what) {
+    redoStack = [];
+    redoButton.setAttribute("disabled", "true");
+  }
+
+  function moveSelection(selection, dX, dY) {
+    for (const subpaths of selection.paths) {
+      for (const {element, points} of subpaths) {
+        for (let i=0; i<points.length; i+=2) {
+          points[i]   += dX;
+          points[i+1] += dY;
+        }
+        element.setAttributeNS(null, "d", pointsToD(points));
+      }
+    }
+    selection.bbox.minX += dX;
+    selection.bbox.minY += dY;
+    selection.bbox.maxX += dX;
+    selection.bbox.maxY += dY;
+    setSelectionRectToBBox(selection.rect, selection.bbox);
+  }
+
+  // pure (but modifies 'rect' in-place)
+  function setSelectionRectToBBox(rect, bbox) {
+    rect.setAttributeNS(null, "x", bbox.minX);
+    rect.setAttributeNS(null, "y", bbox.minY);
+    rect.setAttributeNS(null, "width", bbox.maxX - bbox.minX);
+    rect.setAttributeNS(null, "height", bbox.maxY - bbox.minY);
+  }
 
   function pan(dx, dy) {
     panX += dx;
     panY += dy;
-    translateG.setAttributeNS(null, "transform", `translate(${panX}, ${panY})`);
+    panningG.setAttributeNS(null, "transform", `translate(${panX}, ${panY})`);
   }
 
   let strokeWidth = 2;
@@ -102,16 +210,16 @@
   // only a very rough approximation to know the 'ball park' numbers
   function computeMemUsage() {
     let pointCount = 0;
-    for (const stroke of strokes) {
-      for (const path of stroke) {
-        pointCount += path.points.length;
+    for (const {subpaths} of paths) {
+      for (const {points} of subpaths) {
+        pointCount += points.length;
       }
     }
     const memUsage = pointCount * 8; // 8 bytes per number
     memUsageElement.innerText = memUsage.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ",");
   }
 
-  function startPath(e, continueStroke) {
+  function startPath(e, continuePath) {
     const virtualX = e.clientX - panX;
     const virtualY = e.clientY - panY;
     const element = document.createElementNS("http://www.w3.org/2000/svg", "path");
@@ -119,14 +227,17 @@
     element.setAttributeNS(null, "stroke", "black");
     element.setAttributeNS(null, "stroke-width", (pressureSensitive ? (e.pressure || 0.1) : 0.7)*strokeWidth);
     element.setAttributeNS(null, "fill", "none");
-    translateG.appendChild(element);
-    const stroke = continueStroke || (() => {
-      const stroke = [];
-      strokes.push(stroke);
-      return stroke;
-    })();
-    stroke.push({element, points: [virtualX, virtualY]});
-    pointerId2Stroke.set(e.pointerId, {type: "stroke", stroke});
+    // add path to its own <g> so we can move it efficiently later
+    let subpaths;
+    if (continuePath) {
+      subpaths = continuePath.subpaths;
+    } else {
+      subpaths = [];
+      paths.push({subpaths}); // add to global state
+    }
+    panningG.appendChild(element);
+    subpaths.push({element, points: [virtualX, virtualY]});
+    pointerId2Stroke.set(e.pointerId, {type: "stroke", subpaths});
   }
 
   function startSelection(e) {
@@ -136,11 +247,18 @@
       // pointer is in bounding box?
       if (virtualX >= selection.bbox.minX && virtualX <= selection.bbox.maxX
        && virtualY >= selection.bbox.minY && virtualY <= selection.bbox.maxY) {
-        pointerId2Stroke.set(e.pointerId, {type: "move-select", lastX: virtualX, lastY: virtualY});
-        return
+        pointerId2Stroke.set(e.pointerId, {
+          type: "move-select",
+          selection,
+          startX: virtualX,
+          startY: virtualY,
+          lastX: virtualX,
+          lastY: virtualY,
+        });
+        return;
       }
-      translateG.removeChild(selection.rect);
-      selection = null;
+      // panningG.removeChild(selection.rect);
+      // selection = null;
     }
     const element = document.createElementNS("http://www.w3.org/2000/svg", "rect");
     element.setAttributeNS(null, "x", virtualX);
@@ -149,7 +267,7 @@
     element.setAttributeNS(null, "stroke", "blue");
     element.setAttributeNS(null, "stroke-width", "1");
     element.setAttributeNS(null, "stroke-dasharray", "5 8");
-    translateG.appendChild(element);
+    panningG.appendChild(element);
     pointerId2Stroke.set(e.pointerId, {type: "select", element, startX: virtualX, startY: virtualY});
   }
 
@@ -169,14 +287,6 @@
     return points.reduce((acc, current) => acc + ` ${current}`, "M");
   }
 
-  // pure (but modifies 'rect' in-place)
-  function setSelectionRectToBBox(rect, bbox) {
-    rect.setAttributeNS(null, "x", bbox.minX);
-    rect.setAttributeNS(null, "y", bbox.minY);
-    rect.setAttributeNS(null, "width", bbox.maxX - bbox.minX);
-    rect.setAttributeNS(null, "height", bbox.maxY - bbox.minY);
-  }
-
   function onPointerMove(e) {
     const found = pointerId2Stroke.get(e.pointerId);
     if (found !== undefined) {
@@ -184,7 +294,8 @@
       const virtualY = e.clientY - panY;
       if (found.type === "stroke") {
         if (e.pressure > 0.1) {
-          const {element, points} = found.stroke[found.stroke.length-1];
+          const {subpaths} = found;
+          const {element, points} = subpaths[subpaths.length-1];
           if (points.length >= MAXPATHLENGTH) {
             // performance tweak:
             // split stroke up into several paths
@@ -194,7 +305,7 @@
               clientY: points[points.length-1] + panY,
               pointerId: e.pointerId,
               pressure: e.pressure,
-            }, found.stroke);
+            }, found);
             return onPointerMove(e);
           }
           if (pressureSensitive) {
@@ -206,7 +317,7 @@
                 clientY: points[points.length-1] + panY,
                 pointerId: e.pointerId,
                 pressure: e.pressure,
-              }, found.stroke);
+              }, found);
               return onPointerMove(e);
             }
           }
@@ -245,23 +356,10 @@
         element.setAttributeNS(null, "height", h);
       }
       else if (found.type === "move-select") {
-        const {lastX, lastY} = found;
+        const {lastX, lastY, selection} = found;
         dX = virtualX - lastX;
         dY = virtualY - lastY;
-        for (const stroke of selection.strokes) {
-          for (const {element, points} of stroke) {
-            for (let i=0; i<points.length; i+=2) {
-              points[i]   += dX;
-              points[i+1] += dY;
-            }
-            element.setAttributeNS(null, "d", pointsToD(points));
-          }
-        }
-        selection.bbox.minX += dX;
-        selection.bbox.minY += dY;
-        selection.bbox.maxX += dX;
-        selection.bbox.maxY += dY;
-        setSelectionRectToBBox(selection.rect, selection.bbox);
+        moveSelection(selection, dX, dY);
         found.lastX = virtualX;
         found.lastY = virtualY;
       }
@@ -286,8 +384,8 @@
         const maxX = Math.max(startX, endX);
         const maxY = Math.max(startY, endY);
         const selectedStrokes = [];
-        for (const stroke of strokes) {
-          const inSelection = stroke.every(({element, points}) => {
+        for (const {subpaths} of paths) {
+          const inSelection = subpaths.every(({element, points}) => {
             for (let i=0; i<points.length; i+=2) {
               const pointX = points[i];
               const pointY = points[i+1];
@@ -299,8 +397,12 @@
             return true;
           });
           if (inSelection) {
-            selectedStrokes.push(stroke);
+            selectedStrokes.push(subpaths);
           }
+        }
+        const prevSelection = selection;
+        if (selection !== null) {
+          panningG.removeChild(selection.rect);
         }
         if (selectedStrokes.length > 0) {
           // reuse selection rectangle to visualize selection state
@@ -308,16 +410,31 @@
           setSelectionRectToBBox(element, bbox);
           // set global state
           selection = {
-            strokes: selectedStrokes,
+            paths: selectedStrokes,
             rect: element,
             bbox,
           };
         }
         else {
-          translateG.removeChild(element);
+          panningG.removeChild(element);
           // set global state
           selection = null;
         }
+        console.log({type: "select", selection, prevSelection});
+        pushUndo({type: "select", selection, prevSelection});
+      }
+      else if (found.type === "stroke") {
+        pushUndo(found);
+        clearRedo();
+      }
+      else if (found.type === "move-select") {
+        pushUndo({
+          type: "move-select",
+          dX: found.lastX-found.startX,
+          dY: found.lastY-found.startY,
+          selection: found.selection
+        });
+        clearRedo();
       }
     }
     pointerId2Stroke.delete(e.pointerId);
@@ -361,23 +478,23 @@
   rootSvg.addEventListener("pointerup", onPointerUp);
 
   rootSvg.addEventListener("touchstart", e => {
-    console.log(e);
+    // console.log(e);
   });
   rootSvg.addEventListener("touchmove", e => {
-    console.log(e);
+    // console.log(e);
   });
 
   document.addEventListener("keydown", e => {
     if (e.key === "Delete") {
       if (selection) {
-        // delete selected strokes
-        for (const stroke of selection.strokes) {
+        // delete selected paths
+        for (const stroke of selection.paths) {
           for (const {element} of stroke) {
-            translateG.removeChild(element);
+            panningG.removeChild(element);
           }
         }
-        strokes = strokes.filter(stroke => !selection.strokes.includes(stroke));
-        translateG.removeChild(selection.rect);
+        paths = paths.filter(stroke => !selection.paths.includes(stroke));
+        panningG.removeChild(selection.rect);
         selection = null;
         computeMemUsage();
       }
