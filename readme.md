@@ -1,5 +1,7 @@
 ![screenshot](screenshot.png)
 
+[Live version](https://joeriexelmans.github.io/freehand/sketching.html)
+
 Prototype of a web-/SVG-based sketching app. Wanted to find out if it is possible to support:
   * pressure sensitivity
   * multi-touch (multiple people drawing simultaneously on a large touchscreen)
