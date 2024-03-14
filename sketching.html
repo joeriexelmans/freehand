@@ -16,46 +16,41 @@
       margin: 10px;
       user-select: none;
     }
+
+    svg.pen {
+      cursor: url("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAABGdBTUEAALGPC/xhBQAAAAFzUkdCAK7OHOkAAAAgY0hSTQAAeiYAAICEAAD6AAAAgOgAAHUwAADqYAAAOpgAABdwnLpRPAAAALVJREFUOI1jYCABWFlZ/VdTU1tGih4UzZaWlr/IMgSmGcTm5+d3IckQZM2srKxiID7QECeoIUtJ1szCwiIM4gPF/wD5/4jVLIqm+Tcxmn/j0fyfWM0iZGsGaqJIszBJmlVVVZeAFJiamr4gWTPMdnl5+S5lZeXZJGuGGcDIyMgMYgMNmQN0yXOiNUtJSZWAFDIxMXEBDWFVUFDoBfGJ0ozsTGQMDJNFRGmGOR9kCNAlRURrQgIAdD55TbiN2pIAAAAASUVORK5CYII=") 0 32, default;
+    }
+    svg.select {
+      cursor: crosshair;
+    }
+    svg.pan {
+      cursor: grab;
+    }
+    svg.panning {
+      cursor: grabbing;
+    }
+    svg.select rect.selection {
+      cursor: move;
+    }
   </style>
 </head>
-<body>
 
-<svg id="svg" style="position: absolute; top: 0px; left: 0px; height: 100%; width:100%; touch-action: none">
+<body>
+<svg class="pen" id="svg" style="position: absolute; top: 0px; left: 0px; height: 100%; width:100%; touch-action: none">
   <g id="panning"/>
 </svg>
 
 <div class="controls" style="position: absolute; top: 0px; left: 0px; z-index: 100; background-color: white;">
-
-<span>
-  <input id="undo" type="button" value="undo" disabled />
-  <input id="redo" type="button" value="redo" disabled />
-</span>
-
-<label>
-  <input id="ctrl-pressure" type="checkbox" checked>
-  pressure sensitive
-</label>
-<label>
-  <input id="ctrl-strokewidth" type="number" value="2" style="width:40px" min="1">
-  stroke width
-</label>
-<label>
-  <input id="ctrl-tool-pen" name="tool" value="pen" type="radio" checked>
-  pen
-</label>
-<label>
-  <input id="ctrl-tool-select" name="tool" value="select" type="radio">
-  select
-</label>
-<label>
-  <input id="ctrl-tool-pan" name="tool" value="pan" type="radio">
-  pan
-</label>
-
-<label>
-  <span id="mem-usage">0</span>
-  bytes
-</label>
+  <span>
+    <input id="undo" type="button" value="undo" disabled title="Ctrl+Z" />
+    <input id="redo" type="button" value="redo" disabled title="Ctrl+Shift+Z" />
+  </span>
+  <label> <input id="ctrl-pressure" type="checkbox" checked> pressure sensitive </label>
+  <label> <input id="ctrl-strokewidth" type="number" value="2" style="width:40px" min="1"> stroke width </label>
+  <label> <input id="ctrl-tool-pen" name="tool" value="pen" type="radio" checked> pen </label>
+  <label> <input id="ctrl-tool-select" name="tool" value="select" type="radio"> select </label>
+  <label> <input id="ctrl-tool-pan" name="tool" value="pan" type="radio"> pan </label>
+  <label> <span id="mem-usage">0</span> bytes </label>
 </div>
 
 <script>
@@ -72,7 +67,7 @@
   let mode = "pen";
 
   // for every (mouse, pen, touch, ...) pointer, we keep the state (drawing, selecting, ...)
-  const pointerId2Stroke = new Map();
+  const pointerId2State = new Map();
 
   // everything that has been drawn on the canvas
   let paths = [];
@@ -95,31 +90,31 @@
       const {selection, dX, dY} = toUndo;
       moveSelection(selection, -dX, -dY);
     }
-    else if (toUndo.type === "stroke") {
+    else if (toUndo.type === "pen") {
       for (const {element} of toUndo.subpaths) {
         panningG.removeChild(element);
       }
-      paths.pop(); // safe to assume that path to undo is last in this list.
+      paths = paths.filter(subpaths => subpaths !== toUndo.subpaths); // safe to assume that path to undo is last in this list.
     }
     else if (toUndo.type === "select") {
-      const {newSelection, oldSelection, element} = toUndo;
+      const {newSelection, oldSelection} = toUndo;
       if (newSelection !== null) {
-        panningG.removeChild(newSelection.rect);
+        panningG.removeChild(newSelection.svgRect);
       }
       if (oldSelection !== null) {
-        panningG.appendChild(oldSelection.rect);
+        panningG.appendChild(oldSelection.svgRect);
       }
       selection = oldSelection;
     }
     else if (toUndo.type === "del-select") {
       const {selection: s} = toUndo;
-      for (const stroke of s.paths) {
-        for (const {element} of stroke) {
+      for (const subpaths of s.paths) {
+        for (const {element} of subpaths) {
           panningG.appendChild(element);
         }
       }
-      paths = paths.concat(... s.paths);
-      panningG.appendChild(s.rect);
+      paths = paths.concat(s.paths);
+      panningG.appendChild(s.svgRect);
       selection = s;
     }
     pushRedo(toUndo);
@@ -135,31 +130,31 @@
       const {selection, dX, dY} = toRedo;
       moveSelection(selection, dX, dY);
     }
-    else if (toRedo.type === "stroke") {
+    else if (toRedo.type === "pen") {
       for (const {element} of toRedo.subpaths) {
         panningG.appendChild(element);
       }
-      paths.push({subpaths: toRedo.subpaths});
+      paths.push(toRedo.subpaths);
     }
     else if (toRedo.type === "select") {
-      const {newSelection, oldSelection, element} = toRedo;
+      const {newSelection, oldSelection} = toRedo;
       if (newSelection !== null) {
-        panningG.appendChild(newSelection.rect);
+        panningG.appendChild(newSelection.svgRect);
       }
       if (oldSelection !== null) {
-        panningG.removeChild(oldSelection.rect);
+        panningG.removeChild(oldSelection.svgRect);
       }
       selection = newSelection;
     }
     else if (toRedo.type === "del-select") {
       const {selection: s} = toRedo;
-      for (const stroke of s.paths) {
-        for (const {element} of stroke) {
+      for (const subpaths of s.paths) {
+        for (const {element} of subpaths) {
           panningG.removeChild(element);
         }
       }
       paths = paths.filter(subpaths => !s.paths.includes(subpaths));
-      panningG.removeChild(s.rect);
+      panningG.removeChild(s.svgRect);
       selection = null;
     }
     pushUndo(toRedo);
@@ -201,7 +196,7 @@
     selection.bbox.minY += dY;
     selection.bbox.maxX += dX;
     selection.bbox.maxY += dY;
-    setSelectionRectToBBox(selection.rect, selection.bbox);
+    setSelectionRectToBBox(selection.svgRect, selection.bbox);
   }
 
   // pure (but modifies 'rect' in-place)
@@ -230,6 +225,7 @@
     document.getElementById(tool).addEventListener("change", e => {
       if (e.target.checked) {
          mode = e.target.value;
+         rootSvg.setAttribute("class", e.target.value);
       }
     });
   });
@@ -237,7 +233,7 @@
   // only a very rough approximation to know the 'ball park' numbers
   function computeMemUsage() {
     let pointCount = 0;
-    for (const {subpaths} of paths) {
+    for (const subpaths of paths) {
       for (const {points} of subpaths) {
         pointCount += points.length;
       }
@@ -246,11 +242,9 @@
     memUsageElement.innerText = memUsage.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ",");
   }
 
-  function startPath(e, continuePath) {
-    const virtualX = e.clientX - panX;
-    const virtualY = e.clientY - panY;
+  function startPath(e, virtual, continuePath) {
     const element = document.createElementNS("http://www.w3.org/2000/svg", "path");
-    element.setAttributeNS(null, "d", `M ${virtualX} ${virtualY}`);
+    element.setAttributeNS(null, "d", `M ${virtual.x} ${virtual.y}`);
     element.setAttributeNS(null, "stroke", "black");
     element.setAttributeNS(null, "stroke-width", (pressureSensitive ? (e.pressure || 0.1) : 0.7)*strokeWidth);
     element.setAttributeNS(null, "fill", "none");
@@ -260,205 +254,175 @@
       subpaths = continuePath.subpaths;
     } else {
       subpaths = [];
-      paths.push({subpaths}); // add to global state
+      paths.push(subpaths); // add to global state
     }
     panningG.appendChild(element);
-    subpaths.push({element, points: [virtualX, virtualY]});
-    pointerId2Stroke.set(e.pointerId, {type: "stroke", subpaths});
+    subpaths.push({element, points: [virtual.x, virtual.y]});
+    pointerId2State.set(e.pointerId, {type: "pen", subpaths});
   }
-
-  function startSelection(e) {
-    const virtualX = e.clientX - panX;
-    const virtualY = e.clientY - panY;
-    if (selection) {
-      // pointer is in bounding box?
-      if (virtualX >= selection.bbox.minX && virtualX <= selection.bbox.maxX
-       && virtualY >= selection.bbox.minY && virtualY <= selection.bbox.maxY) {
-        pointerId2Stroke.set(e.pointerId, {
-          type: "move-select",
-          selection,
-          startX: virtualX,
-          startY: virtualY,
-          lastX: virtualX,
-          lastY: virtualY,
-        });
-        return;
-      }
-    }
-    const element = document.createElementNS("http://www.w3.org/2000/svg", "rect");
-    element.setAttributeNS(null, "x", virtualX);
-    element.setAttributeNS(null, "y", virtualY);
-    element.setAttributeNS(null, "fill", "none");
-    element.setAttributeNS(null, "stroke", "blue");
-    element.setAttributeNS(null, "stroke-width", "1");
-    element.setAttributeNS(null, "stroke-dasharray", "5 8");
-    panningG.appendChild(element);
-    pointerId2Stroke.set(e.pointerId, {type: "select", element, startX: virtualX, startY: virtualY});
+  function startSelection(e, virtual) {
+    const svgRect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+    svgRect.setAttributeNS(null, "x", virtual.x);
+    svgRect.setAttributeNS(null, "y", virtual.y);
+    svgRect.setAttributeNS(null, "fill", "rgba(255,255,255,0)");
+    svgRect.setAttributeNS(null, "stroke", "blue");
+    svgRect.setAttributeNS(null, "stroke-width", "1");
+    svgRect.setAttributeNS(null, "stroke-dasharray", "5 8");
+    svgRect.setAttribute("class", "selection");
+    panningG.appendChild(svgRect);
+    pointerId2State.set(e.pointerId, {type: "select", svgRect, startX: virtual.x, startY: virtual.y});
   }
-
+  function startMoveSelection(e, virtual) {
+    pointerId2State.set(e.pointerId, {
+      type: "move-select",
+      selection,
+      startX: virtual.x,
+      startY: virtual.y,
+      lastX: virtual.x,
+      lastY: virtual.y,
+    });
+  }
   function startPan(e) {
-    pointerId2Stroke.set(e.pointerId, {type: "pan", lastX: e.clientX, lastY: e.clientY});
+    pointerId2State.set(e.pointerId, {type: "pan", lastX: e.clientX, lastY: e.clientY});
+    rootSvg.setAttribute("class", "panning");
   }
 
-  // pure
-  function euclideanDistance(x1, y1, x2, y2) {
-    const distX = x1 - x2;
-    const distY = y1 - y2;
-    return Math.sqrt(distX*distX + distY*distY);
-  }
-
-  // pure
-  function pointsToD(points) {
-    return points.reduce((acc, current) => acc + ` ${current}`, "M");
-  }
-
-  function onPointerMove(e) {
-    const found = pointerId2Stroke.get(e.pointerId);
-    if (found !== undefined) {
-      const virtualX = e.clientX - panX;
-      const virtualY = e.clientY - panY;
-      if (found.type === "stroke") {
-        if (e.pressure > 0.1) {
-          const {subpaths} = found;
-          const {element, points} = subpaths[subpaths.length-1];
-          if (points.length >= MAXPATHLENGTH) {
-            // performance tweak:
-            // split stroke up into several paths
-            // start a new path that 'connects' to the old path
-            startPath({
-              clientX: points[points.length-2] + panX,
-              clientY: points[points.length-1] + panY,
-              pointerId: e.pointerId,
-              pressure: e.pressure,
-            }, found);
-            return onPointerMove(e);
-          }
-          if (pressureSensitive) {
-            // restart path if pressure changed sufficiently
-            const pathStrokeWidth = +element.getAttributeNS(null, "stroke-width");
-            if (Math.abs(e.pressure-pathStrokeWidth/strokeWidth)>0.1) {
-              startPath({
-                clientX: points[points.length-2] + panX,
-                clientY: points[points.length-1] + panY,
-                pointerId: e.pointerId,
-                pressure: e.pressure,
-              }, found);
-              return onPointerMove(e);
-            }
-          }
-
-          // // performance tweak: remove points that don't matter much
-          // // To do this, we look at the last three points.
-          // // If the `middle' point is roughly on the line between the oldest and newest point, then we remove the middle point.
-          // if (points.length >= 4) {
-          //   const distPreviousTwoPoints = euclideanDistance(points[points.length-4],points[points.length-3],points[points.length-2],points[points.length-1]);
-          //   const distLastTwoPoints = euclideanDistance(points[points.length-2], points[points.length-1], virtualX, virtualY);
-          //   const distTwoPointsAgo = euclideanDistance(points[points.length-4],points[points.length-3], virtualX, virtualY);
-          //   // last three points will be on a single line if the sum of the distances from middle point to outer points is roughly equal to the distance between the outer points.
-
-          //   const difference = (distPreviousTwoPoints+distLastTwoPoints-distTwoPointsAgo)/distTwoPointsAgo;
-          //   if (difference < 0.01 && distTwoPointsAgo < 20) {
-          //     // remove middle point:
-          //     points.pop();
-          //     points.pop();
-          //   }
-          // }
-          points.push(virtualX, virtualY);
-          const d = pointsToD(points);
-          element.setAttributeNS(null, "d", d);
+  function updatePath(e, virtual, {subpaths}) {
+    if (e.pressure > 0.1) {
+      const {element, points} = subpaths[subpaths.length-1];
+      if (points.length >= MAXPATHLENGTH) {
+        // performance tweak:
+        // split stroke up into several paths
+        // start a new path that 'connects' to the old path
+        startPath({
+          clientX: points[points.length-2] + panX,
+          clientY: points[points.length-1] + panY,
+          pointerId: e.pointerId,
+          pressure: e.pressure,
+        }, virtual, {subpaths});
+        return updatePath(e, virtual, {subpaths});
+      }
+      if (pressureSensitive) {
+        // restart path if pressure changed sufficiently
+        const pathStrokeWidth = +element.getAttributeNS(null, "stroke-width");
+        if (Math.abs(e.pressure-pathStrokeWidth/strokeWidth)>0.1) {
+          startPath({
+            clientX: points[points.length-2] + panX,
+            clientY: points[points.length-1] + panY,
+            pointerId: e.pointerId,
+            pressure: e.pressure,
+          }, virtual, {subpaths});
+          return updatePath(e, virtual, {subpaths});
         }
       }
-      else if (found.type === "select") {
-        // update selection rectangle
-        const {element, startX, startY} = found;
-        const x = Math.min(startX, virtualX);
-        const y = Math.min(startY, virtualY);
-        const w = Math.abs(virtualX - startX);
-        const h = Math.abs(virtualY - startY);
-        element.setAttributeNS(null, "x", x);
-        element.setAttributeNS(null, "y", y);
-        element.setAttributeNS(null, "width", w);
-        element.setAttributeNS(null, "height", h);
-      }
-      else if (found.type === "move-select") {
-        const {lastX, lastY, selection} = found;
-        dX = virtualX - lastX;
-        dY = virtualY - lastY;
-        moveSelection(selection, dX, dY);
-        found.lastX = virtualX;
-        found.lastY = virtualY;
-      }
-      else if (found.type === "pan") {
-        const {lastX, lastY} = found;
-        pan(e.clientX - lastX, e.clientY - lastY);
-        found.lastX = e.clientX;
-        found.lastY = e.clientY;
-      }
+
+      // // performance tweak: remove points that don't matter much
+      // // To do this, we look at the last three points.
+      // // If the `middle' point is roughly on the line between the oldest and newest point, then we remove the middle point.
+      // if (points.length >= 4) {
+      //   const distPreviousTwoPoints = euclideanDistance(points[points.length-4],points[points.length-3],points[points.length-2],points[points.length-1]);
+      //   const distLastTwoPoints = euclideanDistance(points[points.length-2], points[points.length-1], virtual.x, virtual.y);
+      //   const distTwoPointsAgo = euclideanDistance(points[points.length-4],points[points.length-3], virtual.x, virtual.y);
+      //   // last three points will be on a single line if the sum of the distances from middle point to outer points is roughly equal to the distance between the outer points.
+
+      //   const difference = (distPreviousTwoPoints+distLastTwoPoints-distTwoPointsAgo)/distTwoPointsAgo;
+      //   if (difference < 0.01 && distTwoPointsAgo < 20) {
+      //     // remove middle point:
+      //     points.pop();
+      //     points.pop();
+      //   }
+      // }
+      points.push(virtual.x, virtual.y);
+      const d = pointsToD(points);
+      element.setAttributeNS(null, "d", d);
     }
   }
+  function updateSelection(e, virtual, {svgRect, startX, startY}) {
+    // update selection rectangle
+    const x = Math.min(startX, virtual.x);
+    const y = Math.min(startY, virtual.y);
+    const w = Math.abs(virtual.x - startX);
+    const h = Math.abs(virtual.y - startY);
+    svgRect.setAttributeNS(null, "x", x);
+    svgRect.setAttributeNS(null, "y", y);
+    svgRect.setAttributeNS(null, "width", w);
+    svgRect.setAttributeNS(null, "height", h);    
+  }
+  function updateMoveSelection(e, virtual, state) {
+    dX = virtual.x - state.lastX;
+    dY = virtual.y - state.lastY;
+    moveSelection(state.selection, dX, dY);
+    state.lastX = virtual.x;
+    state.lastY = virtual.y;    
+  }
+  function updatePan(e, virtual, state) {
+    const {lastX, lastY} = state;
+    pan(e.clientX - lastX, e.clientY - lastY);
+    state.lastX = e.clientX;
+    state.lastY = e.clientY;
+  }
 
-  function onPointerUp(e) {
-    const found = pointerId2Stroke.get(e.pointerId);
-    if (found !== undefined) {
-      if (found.type === "select") {
-        const {element, startX, startY} = found;
-        const endX = e.clientX - panX;
-        const endY = e.clientY - panY;
-        const minX = Math.min(startX, endX);
-        const minY = Math.min(startY, endY);
-        const maxX = Math.max(startX, endX);
-        const maxY = Math.max(startY, endY);
-        const selectedStrokes = [];
-        for (const {subpaths} of paths) {
-          const inSelection = subpaths.every(({element, points}) => {
-            for (let i=0; i<points.length; i+=2) {
-              const pointX = points[i];
-              const pointY = points[i+1];
-              if (!( pointX >= minX && pointX <= maxX
-                  && pointY >= minY && pointY <= maxY)) {
-                return false;
-              }
-            }
-            return true;
-          });
-          if (inSelection) {
-            selectedStrokes.push(subpaths);
+  function endPath(e, state) {
+    pushUndo(state);
+    clearRedo();
+  }
+  function endSelection(e, {svgRect, startX, startY}) {
+    const endX = e.clientX - panX;
+    const endY = e.clientY - panY;
+    const minX = Math.min(startX, endX);
+    const minY = Math.min(startY, endY);
+    const maxX = Math.max(startX, endX);
+    const maxY = Math.max(startY, endY);
+    const selectedStrokes = [];
+    for (const subpaths of paths) {
+      const inSelection = subpaths.every(({svgRect, points}) => {
+        for (let i=0; i<points.length; i+=2) {
+          const pointX = points[i];
+          const pointY = points[i+1];
+          if (!( pointX >= minX && pointX <= maxX
+              && pointY >= minY && pointY <= maxY)) {
+            return false;
           }
         }
-        let newSelection = null;
-        if (selectedStrokes.length > 0) {
-          // reuse selection rectangle to visualize selection state:
-          const bbox = computeSelectionBBox(selectedStrokes);
-          setSelectionRectToBBox(element, bbox);
-          newSelection = {
-            paths: selectedStrokes,
-            rect: element,
-            bbox,
-          };
-        }
-        else {
-          panningG.removeChild(element);
-        }
-        clearRedo();
-        pushRedo({type: "select", newSelection, oldSelection: selection});
-        redo();
-      }
-      else if (found.type === "stroke") {
-        pushUndo(found);
-        clearRedo();
-      }
-      else if (found.type === "move-select") {
-        pushUndo({
-          type: "move-select",
-          dX: found.lastX-found.startX,
-          dY: found.lastY-found.startY,
-          selection: found.selection
-        });
-        clearRedo();
+        return true;
+      });
+      if (inSelection) {
+        selectedStrokes.push(subpaths);
       }
     }
-    pointerId2Stroke.delete(e.pointerId);
-    computeMemUsage();
+    let newSelection = null;
+    if (selectedStrokes.length > 0) {
+      // reuse selection rectangle to visualize selection state:
+      const bbox = computeSelectionBBox(selectedStrokes);
+      setSelectionRectToBBox(svgRect, bbox);
+      newSelection = {
+        paths: selectedStrokes,
+        svgRect,
+        bbox,
+      };
+      svgRect.addEventListener("pointerdown", e => {
+        startMoveSelection(e, getVirtualXY(e));
+        e.stopPropagation(); // otherwise the 'pointerdown' on rootSvg will also fire
+      });
+    }
+    else {
+      panningG.removeChild(svgRect);
+    }
+    clearRedo();
+    pushRedo({type: "select", newSelection, oldSelection: selection});
+    redo();    
+  }
+  function endMoveSelection(e, {startX, startY, lastX, lastY, selection}) {
+    pushUndo({
+      type: "move-select",
+      dX: lastX - startX,
+      dY: lastY - startY,
+      selection,
+    });
+    clearRedo();
+  }
+  function endPan() {
+    rootSvg.setAttribute("class", "pan");
   }
 
   // pure
@@ -483,36 +447,91 @@
   }
 
   rootSvg.addEventListener("pointerdown", e => {
-    if (mode === "pen") {
-      startPath(e);
+    // keep receiving pointer events even if pointer leaves window:
+    const virtual = getVirtualXY(e);
+    rootSvg.setPointerCapture(e.pointerId);
+    ({
+      "pen": startPath,
+      "select": startSelection,
+      "pan": startPan,
+    }[mode])(e, virtual);
+  });
+  rootSvg.addEventListener("pointermove", e => {
+    const state = pointerId2State.get(e.pointerId);
+    if (state !== undefined) {
+      const virtual = getVirtualXY(e);
+      ({
+        "pen": updatePath,
+        "select": updateSelection,
+        "move-select": updateMoveSelection,
+        "pan": updatePan,
+      }[state.type](e, virtual, state));
     }
-    else if (mode === "select") {
-      startSelection(e);
-    }
-    else if (mode === "pan") {
-      startPan(e);
+  });
+  rootSvg.addEventListener("pointerup", e => {
+    const state = pointerId2State.get(e.pointerId);
+    if (state !== undefined) {
+      ({
+        "pen": endPath,
+        "select": endSelection,
+        "move-select": endMoveSelection,
+        "pan": endPan,
+      }[state.type])(e, state);
+      pointerId2State.delete(e.pointerId);
+      rootSvg.releasePointerCapture(e.pointerId);
+      computeMemUsage();
     }
   });
 
-  rootSvg.addEventListener("pointermove", onPointerMove);
-  rootSvg.addEventListener("pointerup", onPointerUp);
-
-  rootSvg.addEventListener("touchstart", e => {
-    // console.log(e);
-  });
-  rootSvg.addEventListener("touchmove", e => {
-    // console.log(e);
-  });
-
+  // Keyboard shortcuts
   document.addEventListener("keydown", e => {
     if (e.key === "Delete") {
       if (selection) {
         clearRedo();
-        pushRedo({ type: "del-select", selection });
+        pushRedo({type: "del-select", selection});
         redo();
       }
     }
-  })
+    if (e.ctrlKey) {
+      if (e.key === "z") {
+        if (undoStack.length > 0) {
+          undo();
+        }
+      }
+      else if (e.key === "Z") {
+        if (redoStack.length > 0) {
+          redo();
+        }
+      }
+    }
+  });
+
+  // Pan with scroll wheel or touchpad:
+  document.addEventListener("wheel", e => {
+    pan(-e.deltaX*0.5, -e.deltaY*0.5);
+  });
+
+
+  // Helper functions
+
+  // pure
+  function euclideanDistance(x1, y1, x2, y2) {
+    const distX = x1 - x2;
+    const distY = y1 - y2;
+    return Math.sqrt(distX*distX + distY*distY);
+  }
+
+  // pure
+  function pointsToD(points) {
+    return points.reduce((acc, current) => acc + ` ${current}`, "M");
+  }
+
+  function getVirtualXY(e) {
+    return {
+      x: e.clientX - panX,
+      y: e.clientY - panY,
+    };
+  }
 </script>
 </body>
 </html>
