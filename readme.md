@@ -13,3 +13,12 @@ Multi-touch is currently not working. Have yet to figure out the right APIs, and
 Could serve as a basis for research:
   * compressing freehand drawing data (by removing data points that don't matter, or approximating curvy lines with splines)
   * collaborative (a)synchronous sketching
+
+
+TODO checklist (if we ever want to actually use this):
+  * Text mode
+  * Image import
+  * Rotating, resizing shapes
+  * Xournal++ import/export
+  * SVG export
+  * Editor state + history (de-)serialization

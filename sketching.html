@@ -67,12 +67,16 @@
   const redoButton = document.getElementById("redo");
 
   // global state
+  let pressureSensitive = true;
+  let strokeWidth = 2;
+  let mode = "pen";
 
-  // for every pointer, we keep the state (drawing, selecting, ...)
+  // for every (mouse, pen, touch, ...) pointer, we keep the state (drawing, selecting, ...)
   const pointerId2Stroke = new Map();
 
   // everything that has been drawn on the canvas
   let paths = [];
+
 
   // viewport pan
   let panX = 0;
@@ -84,7 +88,8 @@
   let undoStack = [];
   let redoStack = [];
 
-  undoButton.addEventListener("click", e => {
+
+  function undo() {
     const toUndo = undoStack.pop();
     if (toUndo.type === "move-select") {
       const {selection, dX, dY} = toUndo;
@@ -97,23 +102,34 @@
       paths.pop(); // safe to assume that path to undo is last in this list.
     }
     else if (toUndo.type === "select") {
-      const {selection: s, prevSelection, element} = toUndo;
-      if (s !== null) {
-        panningG.removeChild(s.rect);
+      const {newSelection, oldSelection, element} = toUndo;
+      if (newSelection !== null) {
+        panningG.removeChild(newSelection.rect);
       }
-      if (prevSelection !== null) {
-        panningG.appendChild(prevSelection.rect);
+      if (oldSelection !== null) {
+        panningG.appendChild(oldSelection.rect);
       }
-      selection = prevSelection;
+      selection = oldSelection;
+    }
+    else if (toUndo.type === "del-select") {
+      const {selection: s} = toUndo;
+      for (const stroke of s.paths) {
+        for (const {element} of stroke) {
+          panningG.appendChild(element);
+        }
+      }
+      paths = paths.concat(... s.paths);
+      panningG.appendChild(s.rect);
+      selection = s;
     }
     pushRedo(toUndo);
     if (undoStack.length === 0) {
       undoButton.setAttribute("disabled", "true");
     }
     computeMemUsage();
-  });
+  };
 
-  redoButton.addEventListener("click", e => {
+  function redo() {
     const toRedo = redoStack.pop();
     if (toRedo.type === "move-select") {
       const {selection, dX, dY} = toRedo;
@@ -126,21 +142,35 @@
       paths.push({subpaths: toRedo.subpaths});
     }
     else if (toRedo.type === "select") {
-      const {selection: s, prevSelection, element} = toRedo;
-      if (s !== null) {
-        panningG.appendChild(s.rect);
+      const {newSelection, oldSelection, element} = toRedo;
+      if (newSelection !== null) {
+        panningG.appendChild(newSelection.rect);
       }
-      if (prevSelection !== null) {
-        panningG.removeChild(prevSelection.rect);
+      if (oldSelection !== null) {
+        panningG.removeChild(oldSelection.rect);
       }
-      selection = s;
+      selection = newSelection;
+    }
+    else if (toRedo.type === "del-select") {
+      const {selection: s} = toRedo;
+      for (const stroke of s.paths) {
+        for (const {element} of stroke) {
+          panningG.removeChild(element);
+        }
+      }
+      paths = paths.filter(subpaths => !s.paths.includes(subpaths));
+      panningG.removeChild(s.rect);
+      selection = null;
     }
     pushUndo(toRedo);
     if (redoStack.length === 0) {
       redoButton.setAttribute("disabled", "true");
     }
     computeMemUsage();
-  })
+  }
+
+  undoButton.addEventListener("click", undo);
+  redoButton.addEventListener("click", redo);
 
   function pushUndo(what) {
     undoStack.push(what);
@@ -188,17 +218,14 @@
     panningG.setAttributeNS(null, "transform", `translate(${panX}, ${panY})`);
   }
 
-  let strokeWidth = 2;
   document.getElementById("ctrl-strokewidth").addEventListener("change", e => {
     strokeWidth = +e.target.value;
   });
 
-  let pressureSensitive = true;
   document.getElementById("ctrl-pressure").addEventListener("change", e => {
     pressureSensitive = e.target.checked;
   });
 
-  let mode = "pen";
   ["ctrl-tool-pen", "ctrl-tool-select", "ctrl-tool-pan"].forEach(tool => {
     document.getElementById(tool).addEventListener("change", e => {
       if (e.target.checked) {
@@ -257,8 +284,6 @@
         });
         return;
       }
-      // panningG.removeChild(selection.rect);
-      // selection = null;
     }
     const element = document.createElementNS("http://www.w3.org/2000/svg", "rect");
     element.setAttributeNS(null, "x", virtualX);
@@ -400,16 +425,12 @@
             selectedStrokes.push(subpaths);
           }
         }
-        const prevSelection = selection;
-        if (selection !== null) {
-          panningG.removeChild(selection.rect);
-        }
+        let newSelection = null;
         if (selectedStrokes.length > 0) {
-          // reuse selection rectangle to visualize selection state
+          // reuse selection rectangle to visualize selection state:
           const bbox = computeSelectionBBox(selectedStrokes);
           setSelectionRectToBBox(element, bbox);
-          // set global state
-          selection = {
+          newSelection = {
             paths: selectedStrokes,
             rect: element,
             bbox,
@@ -417,11 +438,10 @@
         }
         else {
           panningG.removeChild(element);
-          // set global state
-          selection = null;
         }
-        console.log({type: "select", selection, prevSelection});
-        pushUndo({type: "select", selection, prevSelection});
+        clearRedo();
+        pushRedo({type: "select", newSelection, oldSelection: selection});
+        redo();
       }
       else if (found.type === "stroke") {
         pushUndo(found);
@@ -487,16 +507,9 @@
   document.addEventListener("keydown", e => {
     if (e.key === "Delete") {
       if (selection) {
-        // delete selected paths
-        for (const stroke of selection.paths) {
-          for (const {element} of stroke) {
-            panningG.removeChild(element);
-          }
-        }
-        paths = paths.filter(stroke => !selection.paths.includes(stroke));
-        panningG.removeChild(selection.rect);
-        selection = null;
-        computeMemUsage();
+        clearRedo();
+        pushRedo({ type: "del-select", selection });
+        redo();
       }
     }
   })
