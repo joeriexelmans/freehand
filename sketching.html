@@ -246,13 +246,14 @@
     const element = document.createElementNS("http://www.w3.org/2000/svg", "path");
     element.setAttributeNS(null, "d", `M ${virtual.x} ${virtual.y}`);
     element.setAttributeNS(null, "stroke", "black");
-    element.setAttributeNS(null, "stroke-width", (pressureSensitive ? (e.pressure || 0.1) : 0.7)*strokeWidth);
+    element.setAttributeNS(null, "stroke-width", (pressureSensitive ? (e.pressure || 0.1) : 0.8)*strokeWidth);
     element.setAttributeNS(null, "fill", "none");
     // add path to its own <g> so we can move it efficiently later
     let subpaths;
     if (continuePath) {
       subpaths = continuePath.subpaths;
     } else {
+      // start new path
       subpaths = [];
       paths.push(subpaths); // add to global state
     }
@@ -271,6 +272,7 @@
     svgRect.setAttribute("class", "selection");
     panningG.appendChild(svgRect);
     pointerId2State.set(e.pointerId, {type: "select", svgRect, startX: virtual.x, startY: virtual.y});
+    rootSvg.setAttribute("class", "select");
   }
   function startMoveSelection(e, virtual) {
     pointerId2State.set(e.pointerId, {
@@ -281,6 +283,7 @@
       lastX: virtual.x,
       lastY: virtual.y,
     });
+    rootSvg.setAttribute("class", "select");
   }
   function startPan(e) {
     pointerId2State.set(e.pointerId, {type: "pan", lastX: e.clientX, lastY: e.clientY});
@@ -290,6 +293,9 @@
   function updatePath(e, virtual, {subpaths}) {
     if (e.pressure > 0.1) {
       const {element, points} = subpaths[subpaths.length-1];
+      points.push(virtual.x, virtual.y);
+      const d = pointsToD(points);
+      element.setAttributeNS(null, "d", d);
       if (points.length >= MAXPATHLENGTH) {
         // performance tweak:
         // split stroke up into several paths
@@ -297,10 +303,11 @@
         startPath({
           clientX: points[points.length-2] + panX,
           clientY: points[points.length-1] + panY,
-          pointerId: e.pointerId,
+          clientId: e.clientId,
           pressure: e.pressure,
         }, virtual, {subpaths});
-        return updatePath(e, virtual, {subpaths});
+        return;
+        // return updatePath(e, virtual, {subpaths});
       }
       if (pressureSensitive) {
         // restart path if pressure changed sufficiently
@@ -309,10 +316,11 @@
           startPath({
             clientX: points[points.length-2] + panX,
             clientY: points[points.length-1] + panY,
-            pointerId: e.pointerId,
+            clientId: e.clientId,
             pressure: e.pressure,
           }, virtual, {subpaths});
-          return updatePath(e, virtual, {subpaths});
+          return;
+          // return updatePath(e, virtual, {subpaths});
         }
       }
 
@@ -332,9 +340,6 @@
       //     points.pop();
       //   }
       // }
-      points.push(virtual.x, virtual.y);
-      const d = pointsToD(points);
-      element.setAttributeNS(null, "d", d);
     }
   }
   function updateSelection(e, virtual, {svgRect, startX, startY}) {
@@ -422,7 +427,6 @@
     clearRedo();
   }
   function endPan() {
-    rootSvg.setAttribute("class", "pan");
   }
 
   // pure
@@ -447,14 +451,25 @@
   }
 
   rootSvg.addEventListener("pointerdown", e => {
+    rootSvg.setPointerCapture(e.pointerId);
     // keep receiving pointer events even if pointer leaves window:
     const virtual = getVirtualXY(e);
-    rootSvg.setPointerCapture(e.pointerId);
-    ({
-      "pen": startPath,
-      "select": startSelection,
-      "pan": startPan,
-    }[mode])(e, virtual);
+    let funcToCall;
+    if (e.button === 0) {
+      funcToCall = {
+        "pen": startPath,
+        "select": startSelection,
+        "pan": startPan,
+      }[mode];
+    }
+    else if (e.button === 1) {
+      funcToCall = startPan;
+    }
+    else if (e.button === 2) {
+      funcToCall = startSelection;
+      e.preventDefault();
+    }
+    (funcToCall)(e, virtual);
   });
   rootSvg.addEventListener("pointermove", e => {
     const state = pointerId2State.get(e.pointerId);
@@ -481,6 +496,12 @@
       rootSvg.releasePointerCapture(e.pointerId);
       computeMemUsage();
     }
+    rootSvg.setAttribute("class", mode);
+  });
+
+  // Disable context menu on SVG (right-click already starts selection)
+  rootSvg.addEventListener('contextmenu', e => {
+      e.preventDefault();
   });
 
   // Keyboard shortcuts
@@ -510,7 +531,6 @@
   document.addEventListener("wheel", e => {
     pan(-e.deltaX*0.5, -e.deltaY*0.5);
   });
-
 
   // Helper functions
 
