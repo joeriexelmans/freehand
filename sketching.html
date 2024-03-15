@@ -1,6 +1,6 @@
 <!DOCTYPE html>
-<html>
-<head>
+<html><head>
+<meta http-equiv="content-type" content="text/html; charset=UTF-8">
   <style>
     html, body {
       height: 100%;
@@ -37,17 +37,17 @@
 
 <body>
 <svg class="pen" id="svg" style="position: absolute; top: 0px; left: 0px; height: 100%; width:100%; touch-action: none">
-  <g id="panning"/>
+  <g id="panning"></g>
 </svg>
 
 <div class="controls" style="position: absolute; top: 0px; left: 0px; z-index: 100; background-color: white;">
   <span>
-    <input id="undo" type="button" value="undo" disabled title="Ctrl+Z" />
-    <input id="redo" type="button" value="redo" disabled title="Ctrl+Shift+Z" />
+    <input id="undo" type="button" value="undo" disabled="disabled" title="Ctrl+Z">
+    <input id="redo" type="button" value="redo" disabled="disabled" title="Ctrl+Shift+Z">
   </span>
-  <label> <input id="ctrl-pressure" type="checkbox" checked> pressure sensitive </label>
+  <label> <input id="ctrl-pressure" type="checkbox" checked="checked"> pressure sensitive </label>
   <label> <input id="ctrl-strokewidth" type="number" value="2" style="width:40px" min="1"> stroke width </label>
-  <label> <input id="ctrl-tool-pen" name="tool" value="pen" type="radio" checked> pen </label>
+  <label> <input id="ctrl-tool-pen" name="tool" value="pen" type="radio" checked="checked"> pen </label>
   <label> <input id="ctrl-tool-select" name="tool" value="select" type="radio"> select </label>
   <label> <input id="ctrl-tool-pan" name="tool" value="pan" type="radio"> pan </label>
   <label> <span id="mem-usage">0</span> bytes </label>
@@ -55,6 +55,7 @@
 
 <script>
   const MAXPATHLENGTH = 200;
+  const DEFAULTPRESSURE = 0.8; // pressure to use when pressure sensitivity is turned off, or when the device incorrectly reports pressure
   const rootSvg = document.getElementById("svg");
   const panningG = document.getElementById("panning");
   const memUsageElement = document.getElementById("mem-usage");
@@ -246,7 +247,7 @@
     const element = document.createElementNS("http://www.w3.org/2000/svg", "path");
     element.setAttributeNS(null, "d", `M ${virtual.x} ${virtual.y}`);
     element.setAttributeNS(null, "stroke", "black");
-    element.setAttributeNS(null, "stroke-width", (pressureSensitive ? (e.pressure || 0.1) : 0.8)*strokeWidth);
+    element.setAttributeNS(null, "stroke-width", (pressureSensitive && e.pressure ? e.pressure : DEFAULTPRESSURE)*strokeWidth);
     element.setAttributeNS(null, "fill", "none");
     // add path to its own <g> so we can move it efficiently later
     let subpaths;
@@ -291,39 +292,27 @@
   }
 
   function updatePath(e, virtual, {subpaths}) {
-    if (e.pressure > 0.1) {
+    const pressure = e.pressure || DEFAULTPRESSURE; // workaround in case pressure is incorrectly being reported as always 0
+    if (pressure > 0.1) {
       const {element, points} = subpaths[subpaths.length-1];
       points.push(virtual.x, virtual.y);
       const d = pointsToD(points);
       element.setAttributeNS(null, "d", d);
-      if (points.length >= MAXPATHLENGTH) {
-        // performance tweak:
-        // split stroke up into several paths
-        // start a new path that 'connects' to the old path
+      const currentStrokeWidth = +element.getAttributeNS(null, "stroke-width");
+      // performance tweak:
+      // split stroke up into several paths
+      // start a new path that 'connects' to the old path
+      if (points.length >= MAXPATHLENGTH
+          // also split the path when pressure changed sufficiently (yes this is dirty)
+       || pressureSensitive && Math.abs(pressure - currentStrokeWidth/strokeWidth)>0.1)
+      {
         startPath({
           clientX: points[points.length-2] + panX,
           clientY: points[points.length-1] + panY,
           clientId: e.clientId,
-          pressure: e.pressure,
+          pressure,
         }, virtual, {subpaths});
-        return;
-        // return updatePath(e, virtual, {subpaths});
       }
-      if (pressureSensitive) {
-        // restart path if pressure changed sufficiently
-        const pathStrokeWidth = +element.getAttributeNS(null, "stroke-width");
-        if (Math.abs(e.pressure-pathStrokeWidth/strokeWidth)>0.1) {
-          startPath({
-            clientX: points[points.length-2] + panX,
-            clientY: points[points.length-1] + panY,
-            clientId: e.clientId,
-            pressure: e.pressure,
-          }, virtual, {subpaths});
-          return;
-          // return updatePath(e, virtual, {subpaths});
-        }
-      }
-
       // // performance tweak: remove points that don't matter much
       // // To do this, we look at the last three points.
       // // If the `middle' point is roughly on the line between the oldest and newest point, then we remove the middle point.
@@ -553,5 +542,5 @@
     };
   }
 </script>
-</body>
-</html>
+
+</body></html>
