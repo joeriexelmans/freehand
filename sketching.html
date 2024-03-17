@@ -31,7 +31,7 @@
     svg.panning {
       cursor: grabbing;
     }
-    svg.select rect.selection {
+    rect.selection {
       cursor: move;
     }
     label {
@@ -50,12 +50,15 @@
     <input id="undo" type="button" value="undo" disabled="disabled" title="Ctrl+Z">
     <input id="redo" type="button" value="redo" disabled="disabled" title="Ctrl+Shift+Z">
   </span>
-  <label> <input id="ctrl-pressure" type="checkbox" checked="checked"> pressure sensitive </label>
-  <label> <input id="ctrl-strokewidth" type="number" value="2" style="width:40px" min="1">stroke width </label>
-  <label> <input id="ctrl-tool-pen" name="tool" value="pen" type="radio" checked="checked"> pen </label>
-  <label> <input id="ctrl-tool-select" name="tool" value="select" type="radio"> select </label>
-  <label> <input id="ctrl-tool-pan" name="tool" value="pan" type="radio"> pan </label>
+  <label> <input id="ctrl-strokewidth" type="number" value="2" style="width:40px" min="1"/>stroke width </label>
+  <label> <input id="ctrl-tool-pen" name="tool" value="pen" type="radio" checked="checked"/> pen </label>
+  <label> <input id="ctrl-tool-select" name="tool" value="select" type="radio"/> select </label>
+  <label> <input id="ctrl-tool-pan" name="tool" value="pan" type="radio"/> pan </label>
+  <br/>
+  <label> <input id="ctrl-pressure" type="checkbox" checked="checked"/> pressure sensitive </label>
+  <label> <input id="ctrl-timeres" type="checkbox" checked="checked"/> high time resolution </label>
   <label> <span id="mem-usage">0</span> bytes </label>
+  <!-- <label> <span id="event-rate">0</span> Hz event rate </label> -->
 </div>
 
 <script>
@@ -64,11 +67,13 @@
   const rootSvg = document.getElementById("svg");
   const panningG = document.getElementById("panning");
   const memUsageElement = document.getElementById("mem-usage");
+  // const eventRateElement = document.getElementById("event-rate");
   const undoButton = document.getElementById("undo");
   const redoButton = document.getElementById("redo");
 
   // global state
   let pressureSensitive = true;
+  let highTimeRes = true;
   let strokeWidth = 2;
   let mode = "pen";
 
@@ -89,6 +94,23 @@
   let undoStack = [];
   let redoStack = [];
 
+  document.getElementById("ctrl-strokewidth").addEventListener("change", e => {
+    strokeWidth = +e.target.value;
+  });
+  document.getElementById("ctrl-pressure").addEventListener("change", e => {
+    pressureSensitive = e.target.checked;
+  });
+  document.getElementById("ctrl-timeres").addEventListener("change", e => {
+    highTimeRes = e.target.checked;
+  });
+  ["ctrl-tool-pen", "ctrl-tool-select", "ctrl-tool-pan"].forEach(tool => {
+    document.getElementById(tool).addEventListener("change", e => {
+      if (e.target.checked) {
+         mode = e.target.value;
+         rootSvg.setAttribute("class", e.target.value);
+      }
+    });
+  });
 
   function undo() {
     const toUndo = undoStack.pop();
@@ -218,23 +240,6 @@
     panY += dy;
     panningG.setAttributeNS(null, "transform", `translate(${panX}, ${panY})`);
   }
-
-  document.getElementById("ctrl-strokewidth").addEventListener("change", e => {
-    strokeWidth = +e.target.value;
-  });
-
-  document.getElementById("ctrl-pressure").addEventListener("change", e => {
-    pressureSensitive = e.target.checked;
-  });
-
-  ["ctrl-tool-pen", "ctrl-tool-select", "ctrl-tool-pan"].forEach(tool => {
-    document.getElementById(tool).addEventListener("change", e => {
-      if (e.target.checked) {
-         mode = e.target.value;
-         rootSvg.setAttribute("class", e.target.value);
-      }
-    });
-  });
 
   // only a very rough approximation to know the 'ball park' numbers
   function computeMemUsage() {
@@ -465,7 +470,8 @@
     }
     (funcToCall)(e, virtual);
   });
-  rootSvg.addEventListener("pointermove", e => {
+  const pointerMoveHandler = e => {
+    console.log(e.deviceX);
     const state = pointerId2State.get(e.pointerId);
     if (state !== undefined) {
       const virtual = getVirtualXY(e);
@@ -476,6 +482,16 @@
         "pan": updatePan,
       }[state.type](e, virtual, state));
     }
+  };
+  rootSvg.addEventListener("pointermove", e => {
+    const time = performance.now();
+    if (highTimeRes && e.getCoalescedEvents) {
+      const ces = e.getCoalescedEvents();
+      for (const ce of ces) {
+        pointerMoveHandler(workaroundFirefoxMissingPressureCoalescedEvent(ce, e));
+      }
+    }
+    pointerMoveHandler(e);
   });
   rootSvg.addEventListener("pointerup", e => {
     const state = pointerId2State.get(e.pointerId);
@@ -545,6 +561,17 @@
       x: e.clientX - panX,
       y: e.clientY - panY,
     };
+  }
+
+  // pure
+  function workaroundFirefoxMissingPressureCoalescedEvent(ce, e) {
+    const patchedEvent = ce.pressure ? ce : {
+      clientX: ce.clientX,
+      clientY: ce.clientY,
+      pointerId: ce.pointerId,
+      pressure: e.pressure, // workaround: in Firefox, pressure is missing in coalesced events
+    };
+    return patchedEvent;
   }
 </script>
 
